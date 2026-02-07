@@ -7,7 +7,6 @@
 
 import json
 import logging
-import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -23,6 +22,7 @@ from vllm.entrypoints.anthropic.protocol import (
     AnthropicMessagesResponse,
     AnthropicStreamEvent,
     AnthropicUsage,
+    generate_tool_call_id,
 )
 from vllm.entrypoints.chat_utils import ChatTemplateContentFormatOption
 from vllm.entrypoints.logger import RequestLogger
@@ -41,6 +41,34 @@ from vllm.entrypoints.openai.engine.protocol import (
 from vllm.entrypoints.openai.models.serving import OpenAIServingModels
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_tool_result_text(content: str | list[dict[str, Any]] | None) -> str:
+    """Extract plain text from an Anthropic tool_result content field.
+
+    The Anthropic API allows tool_result content as either a plain string or
+    a list of content blocks (e.g. ``[{"type": "text", "text": "..."}]``).
+    Using ``str()`` on the list form produces a Python repr rather than the
+    actual text.  This helper normalises both forms to a plain string.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                elif block.get("type") == "image":
+                    parts.append("[image]")
+                else:
+                    parts.append(json.dumps(block))
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    return str(content)
 
 
 def wrap_data_with_event(data: str, event: str):
@@ -130,7 +158,7 @@ class AnthropicServingMessages(OpenAIServingChat):
                     elif block.type == "tool_use":
                         # Convert tool use to function call format
                         tool_call = {
-                            "id": block.id or f"call_{int(time.time())}",
+                            "id": block.id or generate_tool_call_id(),
                             "type": "function",
                             "function": {
                                 "name": block.name or "",
@@ -143,16 +171,16 @@ class AnthropicServingMessages(OpenAIServingChat):
                             openai_messages.append(
                                 {
                                     "role": "tool",
-                                    "tool_call_id": block.tool_use_id or "",
-                                    "content": str(block.content)
-                                    if block.content
-                                    else "",
+                                    "tool_call_id": block.id or "",
+                                    "content": _extract_tool_result_text(
+                                        block.content
+                                    ),
                                 }
                             )
                         else:
                             # Assistant tool result becomes regular text
-                            tool_result_text = (
-                                str(block.content) if block.content else ""
+                            tool_result_text = _extract_tool_result_text(
+                                block.content
                             )
                             content_parts.append(
                                 {
@@ -287,6 +315,9 @@ class AnthropicServingMessages(OpenAIServingChat):
                     signature=uuid.uuid4().hex,
                 )
             )
+        # Only include a text block when there is actual text content.
+        # Anthropic clients (e.g. Claude Code) do not expect an empty text
+        # block alongside tool_use blocks.
         if choice.message.content:
             content.append(
                 AnthropicContentBlock(
@@ -296,13 +327,14 @@ class AnthropicServingMessages(OpenAIServingChat):
             )
 
         for tool_call in choice.message.tool_calls:
-            anthropic_tool_call = AnthropicContentBlock(
-                type="tool_use",
-                id=tool_call.id,
-                name=tool_call.function.name,
-                input=json.loads(tool_call.function.arguments),
+            content.append(
+                AnthropicContentBlock(
+                    type="tool_use",
+                    id=tool_call.id,
+                    name=tool_call.function.name,
+                    input=json.loads(tool_call.function.arguments),
+                )
             )
-            content += [anthropic_tool_call]
 
         result.content = content
 
