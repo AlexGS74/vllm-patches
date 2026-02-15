@@ -172,16 +172,12 @@ class AnthropicServingMessages(OpenAIServingChat):
                                 {
                                     "role": "tool",
                                     "tool_call_id": block.id or "",
-                                    "content": _extract_tool_result_text(
-                                        block.content
-                                    ),
+                                    "content": _extract_tool_result_text(block.content),
                                 }
                             )
                         else:
                             # Assistant tool result becomes regular text
-                            tool_result_text = _extract_tool_result_text(
-                                block.content
-                            )
+                            tool_result_text = _extract_tool_result_text(block.content)
                             content_parts.append(
                                 {
                                     "type": "text",
@@ -489,7 +485,7 @@ class AnthropicServingMessages(OpenAIServingChat):
 
                         if origin_chunk.choices[0].finish_reason is not None:
                             finish_reason = origin_chunk.choices[0].finish_reason
-                            # continue
+                            continue
 
                         # thinking / text content
                         reasoning_delta = origin_chunk.choices[0].delta.reasoning
