@@ -36,13 +36,49 @@ break Claude Code compatibility:
 
 ---
 
+### 2. [GLM-4.7] Fix tool call regex — no newline between func name and args
+- **Commit:** `bd6d6e3f1`
+- **Source:** `glm47-nvfp4-sm120/patches/glm47_moe_tool_parser.py`
+- **Date applied:** 2026-02-28
+
+GLM-4.7 emits `<tool_call>func_name<arg_key>...` (no `\n` between name and
+args). The parent class regex requires `\n`, breaking all tool calls.
+Override `func_detail_regex` to `r"<tool_call>([^\s<]+)\s*(.*?)</tool_call>"`
+which handles both GLM-4.5 (with `\n`) and GLM-4.7 (without).
+
+---
+
 ## Already in main (no cherry-pick needed)
 
 ### GLM-4.5 / GLM-4.7 enable_thinking fix
 - **Upstream PR:** [#31788](https://github.com/vllm-project/vllm/pull/31788) (merged 2026-01-06)
-- Fixes `enable_thinking: false` being silently ignored for GLM-4.7, causing
-  answers to land in `reasoning_content` with `content: null`
-- **Status:** In `main` as of the fork date — already present on this branch
+- Fixes `enable_thinking: false` being silently ignored for GLM-4.7
+- **Status:** In `main` as of fork date — already on this branch
+
+### GLM-4.7-NVFP4 k_scale/v_scale missing tensors
+- **Local patch:** `glm47-nvfp4-sm120/patches/vllm_glm4_moe.py`
+- Original fix for vllm==0.15.1: skip `KeyError` on missing FP8 KV-cache
+  scale tensors not present in the Salyut1/GLM-4.7-NVFP4 checkpoint
+- **Status:** Handled in current `main` via `maybe_remap_kv_scale_name()`
+  which returns `None` (skipped) for missing scale tensors
+
+### Anthropic serving None guards
+- **Local patch:** `glm47-nvfp4-sm120/patches/vllm_anthropic_serving.py`
+- Fixes `TypeError` when `tool_calls` is `None` in non-streaming/streaming paths
+- **Status:** Already guarded in current `main` (`if tool_calls:`, `len(...) > 0`)
+
+---
+
+## Model file patches (not in vllm — apply to model checkpoint)
+
+### GLM-4.7 chat_template.jinja — tool calls after `</think>`
+- **Script:** `glm47-nvfp4-sm120/patches/vllm_glm47_chat_template.py`
+- **Target:** `~/.cache/huggingface/hub/models--Salyut1--GLM-4.7-NVFP4/.../chat_template.jinja`
+- GLM-4.7 sometimes places `<tool_call>` inside the `<think>` block; the
+  vLLM reasoning parser strips that content before the tool parser runs,
+  silently losing tool calls. The patch adds an instruction to the template
+  telling the model to emit tool calls after `</think>`.
+- **Apply:** `python glm47-nvfp4-sm120/patches/vllm_glm47_chat_template.py`
 
 ---
 
